@@ -52,9 +52,12 @@ class CrossModulePipeline:
         """完整采集管道：采集 -> 解析 -> 映射 -> 输出。"""
         started_at = time.time()
 
-        active_sources = self.log_source.get_active_sources()
+        # 按批量接入规则就绪回执取可用来源，规则未就绪的源不进入解析管道
+        ready_listing = self.log_source.get_ready_sources_for_parsing()
+        ready_keys = {item["source_key"] for item in ready_listing}
+        active_sources = [s for s in self.log_source.get_active_sources() if s["源编号"] in ready_keys]
         if not active_sources:
-            return {"error": "无活跃日志源", "status": "no_sources"}
+            return {"error": "无规则就绪的可解析日志源", "status": "no_ready_sources"}
 
         if source_id > 0:
             active_sources = [s for s in active_sources if s.get("id") == source_id]

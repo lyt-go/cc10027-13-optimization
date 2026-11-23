@@ -29,3 +29,9 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+
+
+class BatchOnboardPayload(BaseModel):
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    operator: str = "operator-a"
+    batch_id: str | None = None

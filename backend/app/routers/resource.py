@@ -8,8 +8,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.schemas import ActionPayload, ActionResult, EntryPayload, PageResult
+from app.schemas import ActionPayload, ActionResult, BatchOnboardPayload, EntryPayload, PageResult
 from app.services import service_for
+from app.services.log_parser import LogParserService
+from app.services.log_source import LogSourceService
 from app.services.pipeline import pipeline
 
 router = APIRouter(prefix="/api", tags=["业务资源"])
@@ -20,6 +22,64 @@ def require_service(module: str):
     if service is None:
         raise HTTPException(status_code=404, detail=f"未知业务模块：{module}")
     return service
+
+
+# -- 批量接入与规则就绪回执（固定路径，须在 /{module} 动态路由之前注册）--
+
+@router.post("/log-sources/batch-onboard")
+def batch_onboard_sources(payload: BatchOnboardPayload) -> dict[str, Any]:
+    """一次提交多源批量接入，返回逐源规则就绪回执。"""
+    if not payload.sources:
+        raise HTTPException(status_code=400, detail="批量接入至少需要一个来源")
+    return LogSourceService().batch_onboard_sources(
+        payload.sources, operator=payload.operator, batch_id=payload.batch_id
+    )
+
+
+@router.get("/log-sources/batch-receipts")
+def list_batch_receipts() -> dict[str, Any]:
+    """批量接入回执清单。"""
+    receipts = LogSourceService().list_batch_receipts()
+    return {"items": receipts, "total": len(receipts)}
+
+
+@router.get("/log-sources/batch-receipts/{batch_id}")
+def get_batch_receipt(batch_id: str) -> dict[str, Any]:
+    receipt = LogSourceService().get_batch_receipt(batch_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail=f"批次 {batch_id} 回执不存在")
+    return receipt
+
+
+@router.get("/log-sources/{source_key}/readiness")
+def get_source_readiness(source_key: str) -> dict[str, Any]:
+    """核对某源就绪状态、实际可解析性与生效解析配置身份。"""
+    return LogSourceService().get_source_readiness(source_key)
+
+
+@router.post("/log-sources/{source_key}/retry")
+def retry_pending_source(source_key: str, payload: BatchOnboardPayload | None = None) -> dict[str, Any]:
+    """恢复后复跑待补来源。"""
+    operator = payload.operator if payload and payload.operator else "operator-a"
+    batch_id = payload.batch_id if payload else None
+    return LogSourceService().retry_pending_source(source_key, operator=operator, batch_id=batch_id)
+
+
+@router.get("/log-sources/ready/parseable")
+def get_parseable_sources() -> dict[str, Any]:
+    """日志解析按就绪回执取实际可解析来源。"""
+    items = LogSourceService().get_ready_sources_for_parsing()
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/log-sources/simulate-parser-write-failure/{source_key}")
+def simulate_parser_write_failure(source_key: str, enabled: bool = Query(default=True)) -> dict[str, Any]:
+    """打开/关闭某源默认解析规则落盘故障注入。"""
+    if enabled:
+        LogParserService.set_write_failure(source_key)
+    else:
+        LogParserService.clear_write_failure(source_key)
+    return {"ok": True, "source_key": source_key, "write_failure_enabled": enabled}
 
 
 @router.get("/{module}", response_model=PageResult[dict])
